@@ -16,6 +16,11 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1)
 
 
+class TaskUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1)
+    done: Optional[bool] = None
+
+
 @app.get("/")
 def root():
     return {"name": "Task API", "version": "1.0", "endpoints": ["/tasks"]}
@@ -46,3 +51,26 @@ def create_task(body: TaskCreate):
     tasks_db.append(task)
     next_id += 1
     return task
+
+
+@app.put("/tasks/{task_id}")
+def update_task(task_id: int, body: TaskUpdate):
+    if body.title is None and body.done is None:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    for task in tasks_db:
+        if task["id"] == task_id:
+            if body.title is not None:
+                task["title"] = body.title
+            if body.done is not None:
+                task["done"] = body.done
+            return task
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+
+@app.delete("/tasks/{task_id}", status_code=204)
+def delete_task(task_id: int):
+    for i, task in enumerate(tasks_db):
+        if task["id"] == task_id:
+            tasks_db.pop(i)
+            return
+    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
