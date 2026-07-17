@@ -11,15 +11,18 @@ load_dotenv()
 
 app = FastAPI(title="Task API", version="1.0")
 
-db = mysql.connector.connect(
-    host=os.getenv("DB_HOST", "localhost"),
-    port=int(os.getenv("DB_PORT", 3306)),
-    user=os.getenv("DB_USER", "root"),
-    password=os.getenv("DB_PASSWORD", ""),
-    database=os.getenv("DB_NAME", "task_api"),
-    use_pure=True,
-)
-cursor = db.cursor(dictionary=True)
+try:
+    db = mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        port=int(os.getenv("DB_PORT")),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME"),
+        use_pure=True,
+    )
+    cursor = db.cursor(dictionary=True)
+except mysql.connector.Error:
+    raise RuntimeError("Database connection failed. Check your .env settings and ensure MySQL is running.")
 
 
 def to_task(row):
