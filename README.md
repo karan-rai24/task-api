@@ -1,11 +1,30 @@
 # Task API
 
-A simple CRUD API for managing a to-do list, built with FastAPI (Python).
+A CRUD API for managing a to-do list, built with FastAPI (Python) and MySQL.
+
+## Prerequisites
+
+- Python 3.10+
+- MySQL 8.0 running on port 3307
 
 ## How to install & run
 
 ```bash
-pip install fastapi uvicorn
+# Install dependencies
+pip install fastapi uvicorn mysql-connector-python python-dotenv
+
+# Create .env file with your MySQL credentials
+echo DB_HOST=localhost > .env
+echo DB_PORT=3307 >> .env
+echo DB_USER=root >> .env
+echo DB_PASSWORD=karan >> .env
+echo DB_NAME=task_api >> .env
+
+# Create the database and table (run once)
+mysql -u root -p -P 3307 -e "CREATE DATABASE IF NOT EXISTS task_api"
+mysql -u root -p -P 3307 task_api -e "CREATE TABLE IF NOT EXISTS api_tasks (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255) NOT NULL, done TINYINT(1) NOT NULL DEFAULT 0)"
+
+# Start the server
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 

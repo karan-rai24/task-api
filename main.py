@@ -3,8 +3,28 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
+import os
+from dotenv import load_dotenv
+import mysql.connector
+
+load_dotenv()
 
 app = FastAPI(title="Task API", version="1.0")
+
+db = mysql.connector.connect(
+    host=os.getenv("DB_HOST", "localhost"),
+    port=int(os.getenv("DB_PORT", 3306)),
+    user=os.getenv("DB_USER", "root"),
+    password=os.getenv("DB_PASSWORD", ""),
+    database=os.getenv("DB_NAME", "task_api"),
+    use_pure=True,
+)
+cursor = db.cursor(dictionary=True)
+
+
+def to_task(row):
+    row["done"] = bool(row["done"])
+    return row
 
 
 @app.exception_handler(RequestValidationError)
@@ -16,14 +36,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         msg = err["msg"]
         messages.append(f"{field}: {msg}")
     return JSONResponse(status_code=400, content={"error": "; ".join(messages)})
-
-
-tasks_db = [
-    {"id": 1, "title": "Buy groceries", "done": False},
-    {"id": 2, "title": "Read a book", "done": True},
-    {"id": 3, "title": "Learn FastAPI", "done": False},
-]
-next_id = 4
 
 
 class TaskCreate(BaseModel):
@@ -47,68 +59,88 @@ def health():
 
 @app.get("/tasks")
 def list_tasks(done: Optional[bool] = None, search: Optional[str] = None):
-    result = tasks_db
+    query = "SELECT * FROM api_tasks"
+    conditions = []
+    params = []
     if done is not None:
-        result = [t for t in result if t["done"] == done]
+        conditions.append("done = %s")
+        params.append(int(done))
     if search:
-        result = [t for t in result if search.lower() in t["title"].lower()]
-    return result
+        conditions.append("title LIKE %s")
+        params.append(f"%{search}%")
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    cursor.execute(query, params)
+    return [to_task(row) for row in cursor.fetchall()]
 
 
 @app.get("/tasks/{task_id}")
 def get_task(task_id: int):
-    for task in tasks_db:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
+    task = cursor.fetchone()
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return to_task(task)
 
 
 @app.post("/tasks", status_code=201)
 def create_task(body: TaskCreate):
-    global next_id
-    task = {"id": next_id, "title": body.title, "done": False}
-    tasks_db.append(task)
-    next_id += 1
-    return task
+    cursor.execute(
+        "INSERT INTO api_tasks (title, done) VALUES (%s, 0)",
+        (body.title,),
+    )
+    db.commit()
+    task_id = cursor.lastrowid
+    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
+    return to_task(cursor.fetchone())
 
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: int, body: TaskUpdate):
     if body.title is None and body.done is None:
         raise HTTPException(status_code=400, detail="No fields to update")
-    for task in tasks_db:
-        if task["id"] == task_id:
-            if body.title is not None:
-                task["title"] = body.title
-            if body.done is not None:
-                task["done"] = body.done
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
+    task = cursor.fetchone()
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    new_title = body.title if body.title is not None else task["title"]
+    new_done = body.done if body.done is not None else bool(task["done"])
+    cursor.execute(
+        "UPDATE api_tasks SET title = %s, done = %s WHERE id = %s",
+        (new_title, int(new_done), task_id),
+    )
+    db.commit()
+    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
+    return to_task(cursor.fetchone())
 
 
 @app.delete("/tasks/{task_id}", status_code=204)
 def delete_task(task_id: int):
-    for i, task in enumerate(tasks_db):
-        if task["id"] == task_id:
-            tasks_db.pop(i)
-            return
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
+    task = cursor.fetchone()
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    cursor.execute("DELETE FROM api_tasks WHERE id = %s", (task_id,))
+    db.commit()
 
 
 @app.get("/stats")
 def stats():
-    total = len(tasks_db)
-    done = sum(1 for t in tasks_db if t["done"])
+    cursor.execute(
+        "SELECT COUNT(*) AS total, SUM(done) AS done FROM api_tasks"
+    )
+    row = cursor.fetchone()
+    total = row["total"]
+    done = row["done"] or 0
     return {"total": total, "done": done, "open": total - done}
 
 
 @app.post("/reset")
 def reset():
-    global tasks_db, next_id
-    tasks_db = [
-        {"id": 1, "title": "Buy groceries", "done": False},
-        {"id": 2, "title": "Read a book", "done": True},
-        {"id": 3, "title": "Learn FastAPI", "done": False},
-    ]
-    next_id = 4
+    cursor.execute("TRUNCATE TABLE api_tasks")
+    cursor.execute(
+        "INSERT INTO api_tasks (title, done) VALUES (%s, %s), (%s, %s), (%s, %s)",
+        ("Buy groceries", 0, "Read a book", 1, "Learn FastAPI", 0),
+    )
+    db.commit()
     return {"message": "Tasks reset to defaults"}
