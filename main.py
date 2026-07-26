@@ -1,33 +1,42 @@
+import sqlite3
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Optional
-import os
-from dotenv import load_dotenv
-import mysql.connector
 
-load_dotenv()
+DB_FILE = "tasks.db"
 
 app = FastAPI(title="Task API", version="1.0")
 
-try:
-    db = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        port=int(os.getenv("DB_PORT")),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
-        use_pure=True,
-    )
-    cursor = db.cursor(dictionary=True)
-except mysql.connector.Error:
-    raise RuntimeError("Database connection failed. Check your .env settings and ensure MySQL is running.")
+
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def to_task(row):
-    row["done"] = bool(row["done"])
-    return row
+    return {"id": row["id"], "title": row["title"], "done": bool(row["done"])}
+
+
+@app.on_event("startup")
+def startup():
+    conn = get_db()
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tasks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "title TEXT NOT NULL,"
+        "done INTEGER NOT NULL DEFAULT 0)"
+    )
+    count = conn.execute("SELECT COUNT(*) AS cnt FROM tasks").fetchone()["cnt"]
+    if count == 0:
+        conn.execute(
+            "INSERT INTO tasks (title, done) VALUES (?, ?), (?, ?), (?, ?)",
+            ("Buy groceries", 0, "Read a book", 1, "Learn FastAPI", 0),
+        )
+        conn.commit()
+    conn.close()
 
 
 @app.exception_handler(RequestValidationError)
@@ -62,88 +71,96 @@ def health():
 
 @app.get("/tasks")
 def list_tasks(done: Optional[bool] = None, search: Optional[str] = None):
-    query = "SELECT * FROM api_tasks"
+    conn = get_db()
+    query = "SELECT * FROM tasks"
     conditions = []
     params = []
     if done is not None:
-        conditions.append("done = %s")
+        conditions.append("done = ?")
         params.append(int(done))
     if search:
-        conditions.append("title LIKE %s")
+        conditions.append("title LIKE ?")
         params.append(f"%{search}%")
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    cursor.execute(query, params)
-    return [to_task(row) for row in cursor.fetchall()]
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [to_task(row) for row in rows]
 
 
 @app.get("/tasks/{task_id}")
 def get_task(task_id: int):
-    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
-    task = cursor.fetchone()
-    if task is None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    if row is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-    return to_task(task)
+    return to_task(row)
 
 
 @app.post("/tasks", status_code=201)
 def create_task(body: TaskCreate):
-    cursor.execute(
-        "INSERT INTO api_tasks (title, done) VALUES (%s, 0)",
-        (body.title,),
-    )
-    db.commit()
-    task_id = cursor.lastrowid
-    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
-    return to_task(cursor.fetchone())
+    conn = get_db()
+    cur = conn.execute("INSERT INTO tasks (title, done) VALUES (?, 0)", (body.title,))
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    return to_task(row)
 
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: int, body: TaskUpdate):
     if body.title is None and body.done is None:
         raise HTTPException(status_code=400, detail="No fields to update")
-    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
-    task = cursor.fetchone()
-    if task is None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        conn.close()
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-    new_title = body.title if body.title is not None else task["title"]
-    new_done = body.done if body.done is not None else bool(task["done"])
-    cursor.execute(
-        "UPDATE api_tasks SET title = %s, done = %s WHERE id = %s",
+    new_title = body.title if body.title is not None else row["title"]
+    new_done = body.done if body.done is not None else bool(row["done"])
+    conn.execute(
+        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
         (new_title, int(new_done), task_id),
     )
-    db.commit()
-    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
-    return to_task(cursor.fetchone())
+    conn.commit()
+    updated = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    return to_task(updated)
 
 
 @app.delete("/tasks/{task_id}", status_code=204)
 def delete_task(task_id: int):
-    cursor.execute("SELECT * FROM api_tasks WHERE id = %s", (task_id,))
-    task = cursor.fetchone()
-    if task is None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None:
+        conn.close()
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
-    cursor.execute("DELETE FROM api_tasks WHERE id = %s", (task_id,))
-    db.commit()
+    conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
 
 
 @app.get("/stats")
 def stats():
-    cursor.execute(
-        "SELECT COUNT(*) AS total, SUM(done) AS done FROM api_tasks"
-    )
-    row = cursor.fetchone()
+    conn = get_db()
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, SUM(done) AS done FROM tasks"
+    ).fetchone()
+    conn.close()
     total = row["total"]
-    done = row["done"] or 0
-    return {"total": total, "done": done, "open": total - done}
+    done_count = row["done"] or 0
+    return {"total": total, "done": done_count, "open": total - done_count}
 
 
 @app.post("/reset")
 def reset():
-    cursor.execute("TRUNCATE TABLE api_tasks")
-    cursor.execute(
-        "INSERT INTO api_tasks (title, done) VALUES (%s, %s), (%s, %s), (%s, %s)",
+    conn = get_db()
+    conn.execute("DELETE FROM tasks")
+    conn.execute(
+        "INSERT INTO tasks (title, done) VALUES (?, ?), (?, ?), (?, ?)",
         ("Buy groceries", 0, "Read a book", 1, "Learn FastAPI", 0),
     )
-    db.commit()
+    conn.commit()
+    conn.close()
     return {"message": "Tasks reset to defaults"}

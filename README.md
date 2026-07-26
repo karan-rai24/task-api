@@ -1,32 +1,24 @@
 # Task API
 
-A CRUD API for managing a to-do list, built with FastAPI (Python) and MySQL.
+A CRUD API for managing a task list, built with FastAPI (Python) and SQLite.
 
-## Prerequisites
+Data persists across server restarts via a `tasks.db` file.
 
-- Python 3.10+
-- MySQL 8.0 running on port 3307
+## Why SQLite?
+
+SQLite requires no installation, no server process, and no configuration. The database is a single file (`tasks.db`) created automatically when the application starts. This makes it ideal for development, learning, and small-scale projects.
 
 ## How to install & run
 
 ```bash
 # Install dependencies
-pip install fastapi uvicorn mysql-connector-python python-dotenv
-
-# Create .env file with your MySQL credentials
-echo DB_HOST=localhost > .env
-echo DB_PORT=3307 >> .env
-echo DB_USER=root >> .env
-echo DB_PASSWORD=karan >> .env
-echo DB_NAME=task_api >> .env
-
-# Create the database and table (run once)
-mysql -u root -p -P 3307 -e "CREATE DATABASE IF NOT EXISTS task_api"
-mysql -u root -p -P 3307 task_api -e "CREATE TABLE IF NOT EXISTS api_tasks (id INT AUTO_INCREMENT PRIMARY KEY, title VARCHAR(255) NOT NULL, done TINYINT(1) NOT NULL DEFAULT 0)"
+pip install -r requirements.txt
 
 # Start the server
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --reload
 ```
+
+The `tasks.db` file and the `tasks` table are created automatically on first run. Three sample tasks are inserted if the table is empty.
 
 Open http://localhost:8000 in your browser.
 
@@ -107,6 +99,43 @@ content-type: application/json
 {"detail":"Task 99 not found"}
 ```
 
+## Database file
+
+The database is stored in `tasks.db` in the project root. You can inspect it with any SQLite viewer:
+
+```bash
+sqlite3 tasks.db
+```
+
+Useful SQL queries:
+
+```sql
+-- List every task
+SELECT * FROM tasks;
+
+-- Show only completed tasks
+SELECT * FROM tasks WHERE done = 1;
+
+-- Count all tasks
+SELECT COUNT(*) FROM tasks;
+
+-- Mark every task as completed
+UPDATE tasks SET done = 1;
+
+-- Delete all completed tasks
+DELETE FROM tasks WHERE done = 1;
+```
+
 ## Screenshots
 
 ![Swagger UI](./screenshot.png)
+
+## Project structure
+
+```
+task-api/
+├── main.py           # FastAPI app with SQLite CRUD
+├── requirements.txt  # Python dependencies
+├── tasks.db          # SQLite database (auto-created)
+└── README.md
+```
