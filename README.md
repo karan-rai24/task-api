@@ -128,7 +128,7 @@ DELETE FROM tasks WHERE done = 1;
 
 ## Screenshots
 
-![Swagger UI](./screenshot.png)
+![Database Viewer](./screenshot-db.png)
 
 ## Project structure
 
